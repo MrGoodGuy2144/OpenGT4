@@ -1,3 +1,8 @@
+> **Experimental Steam Deck fork — Based on OpenGT4.** This is a modified,
+> unofficial Linux port, not the official OpenGT4 release. Linux build instructions,
+> AppImage packaging, first-run setup, and outstanding on-device checks are in
+> [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Steam Deck gameplay is not yet validated.
+
 <div align="center">
 
 # OpenGT4

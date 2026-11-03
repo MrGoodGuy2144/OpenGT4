@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=OpenGT4 Steam Deck Edition (Experimental)
+Comment=Based on OpenGT4 — requires your own Gran Turismo 4 disc image
+Exec=opengt4
+Icon=opengt4-steam-deck
+Terminal=false
+Categories=Game;SportsGame;

@@ -58,3 +58,8 @@ splat/undefined_*_auto.txt
 
 # PCSX2 reference captures (game memory, never commit)
 captures/
+
+# Linux and AppImage output
+build-linux/
+AppDir/
+*.AppImage

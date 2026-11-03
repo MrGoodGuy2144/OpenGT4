@@ -7,6 +7,8 @@
  * view draws the course and every car where the physics has it.
  */
 #include "race_game.h"
+#include "career_original.h"
+static int watched_car(const race_game *g);
 #include "race_run.h"
 #include "race_view.h"
 #include "race_hud.h"

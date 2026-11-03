@@ -140,6 +140,8 @@ target_link_libraries(opengt4_physics PUBLIC opengt4_core)
 # so no folding across fesetround. (Signed zeros in clamps: gt4_select.)
 if(MSVC)
   target_compile_options(opengt4_physics PRIVATE /fp:strict)
+else()
+  target_compile_options(opengt4_physics PRIVATE -ffp-contract=off -frounding-math)
 endif()
 
 # Career car construction reuses the native car APIs without adding EE code.
@@ -176,6 +178,11 @@ target_include_directories(opengt4_platform_sdl PUBLIC include src/platform/sdl 
 target_link_libraries(opengt4_platform_sdl PUBLIC SDL2::SDL2-static opengt4_physics)
 if(WIN32)
   target_link_libraries(opengt4_platform_sdl PUBLIC opengl32)   # GL 1.1 entry points
+else()
+  find_package(OpenGL REQUIRED)
+  target_link_libraries(opengt4_platform_sdl PUBLIC OpenGL::GL)
+  target_link_libraries(opengt4_core PUBLIC m)
+  target_link_libraries(opengt4_physics PUBLIC m)
 endif()
 find_program(OPENGT4_FFMPEG NAMES ffmpeg DOC "FFmpeg executable for menu MPEG-2 playback (not a launcher shim)")
 # a release looks for FFmpeg beside the exe and on PATH only, never at a
@@ -2591,4 +2598,22 @@ if(OPENGT4_TEST_DISC)
   add_test(NAME gtmode_transmission COMMAND gtmode_transmission_test "${OPENGT4_TEST_DISC}" "${CMAKE_BINARY_DIR}/gtmode-transmission-save")
   add_test(NAME gtmode_transmission_negative COMMAND gtmode_transmission_test "${OPENGT4_TEST_DISC}" "${CMAKE_BINARY_DIR}/gtmode-transmission-negative-save" --negative)
   set_tests_properties(gtmode_transmission_negative PROPERTIES WILL_FAIL TRUE)
+endif()
+
+# Linux decoder lifecycle: real FFmpeg, synthetic video, no disc or GPU.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(Python3 COMPONENTS Interpreter)
+  add_executable(movie_posix_tests tests/ui/test_movie_posix.c src/platform/sdl/movie.c)
+  target_include_directories(movie_posix_tests PRIVATE src/platform/sdl)
+  target_link_libraries(movie_posix_tests PRIVATE opengt4_core SDL2::SDL2-static)
+  if(Python3_Interpreter_FOUND AND OPENGT4_FFMPEG)
+    add_test(NAME movie_posix COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/ui/test_movie_posix.py"
+      "$<TARGET_FILE:movie_posix_tests>" "${OPENGT4_FFMPEG}")
+    set_tests_properties(movie_posix PROPERTIES TIMEOUT 40)
+  endif()
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND Python3_Interpreter_FOUND)
+  add_test(NAME appimage_launcher COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_SOURCE_DIR}/tests/ui/test_apprun.py")
 endif()

@@ -15,6 +15,7 @@
 #include "race_view.h"
 #include "photo_travel.h"
 #include "race_game.h"
+#include "race_hud.h"
 #include "race_run.h"
 #include "boot_notice.h"
 #include "loading_screen.h"

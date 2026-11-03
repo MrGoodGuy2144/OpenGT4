@@ -1,0 +1,35 @@
+name: Experimental Linux build
+on:
+  push:
+    branches: [main, steam-deck-linux]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and media dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config libgl1-mesa-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libasound2-dev libpulse-dev libudev-dev ffmpeg
+      - name: Configure
+        run: cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build game and selected tests
+        run: cmake --build build-linux --target opengt4 launcher_tests media_tests sound_tests movie_posix_tests --parallel 2
+      - name: Validate without game data
+        run: ctest --test-dir build-linux --output-on-failure -R '^(launcher_config|launcher_config_negative|native_media|native_sound|menu_music_prefix_negative|movie_posix|appimage_launcher)$'
+      - name: Check packaging scripts
+        run: |
+          sh -n packaging/linux/AppRun
+          bash -n tools/package_appimage.sh
+      - name: Preserve test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-test-logs
+          path: build-linux/Testing/Temporary/LastTest.log
