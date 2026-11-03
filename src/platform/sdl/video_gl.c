@@ -208,7 +208,12 @@ int plat_video_init(const plat_video_desc *d)
     const char *capture_position=getenv("OPENGT4_WINDOW_POSITION");
     if(capture_position && sscanf(capture_position,"%d,%d",&window_x,&window_y)==2)
         SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN,"1");
-    window = SDL_CreateWindow("OpenGT4", window_x, window_y, d->width, d->height,
+#ifdef _WIN32
+    const char *window_title="OpenGT4";
+#else
+    const char *window_title="OpenGT4 Steam Deck Edition (experimental) - Based on OpenGT4";
+#endif
+    window = SDL_CreateWindow(window_title, window_x, window_y, d->width, d->height,
                               SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
                               (d->fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
     if (!window) return -1;

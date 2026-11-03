@@ -8,11 +8,26 @@
 #include <wchar.h>
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <errno.h>
+extern char **environ;
+#endif
 #define FRAME_BYTES (640*448*4)
 #define QUEUE 6
 struct sdl_movie {
+#ifdef _WIN32
     HANDLE process,pipe;
     wchar_t path[MAX_PATH];
+#else
+    pid_t process;
+    int pipe;
+    char path[1024];
+#endif
     SDL_Thread *thread;
     SDL_mutex *lock;
     SDL_cond *ready;
@@ -67,9 +82,15 @@ static int decode(void *ptr)
         if(stop)break;
         size_t offset=0;
         while(offset<FRAME_BYTES) {
+#ifdef _WIN32
             DWORD got=0;
             if(!ReadFile(m->pipe,m->frames[slot]+offset,(DWORD)(FRAME_BYTES-offset),&got,NULL) || !got)break;
-            offset+=got;
+#else
+            ssize_t got=read(m->pipe,m->frames[slot]+offset,FRAME_BYTES-offset);
+            if(got<0 && errno==EINTR)continue;
+            if(got<=0)break;
+#endif
+            offset+=(size_t)got;
         }
         if(offset!=FRAME_BYTES)break;
         SDL_LockMutex(m->lock);m->count++;SDL_UnlockMutex(m->lock);
@@ -85,11 +106,20 @@ void sdl_movie_close(sdl_movie *m)
     if(!m)return;
     sdl_movie_audio(m,0);
     if(m->lock){SDL_LockMutex(m->lock);m->stop=1;if(m->ready)SDL_CondSignal(m->ready);SDL_UnlockMutex(m->lock);}
+#ifdef _WIN32
     if(m->process)TerminateProcess(m->process,0); /* releases a blocked pipe read */
     if(m->thread)SDL_WaitThread(m->thread,NULL);
     if(m->pipe)CloseHandle(m->pipe);
     if(m->process){WaitForSingleObject(m->process,2000);CloseHandle(m->process);}
     if(m->path[0])DeleteFileW(m->path);
+#else
+    /* Killing the child releases a blocked reader even when the queue is full. */
+    if(m->process>0)kill(m->process,SIGKILL);
+    if(m->thread)SDL_WaitThread(m->thread,NULL);
+    if(m->pipe>=0)close(m->pipe);
+    if(m->process>0)while(waitpid(m->process,NULL,0)<0 && errno==EINTR){}
+    if(m->path[0])unlink(m->path);
+#endif
     if(m->ready)SDL_DestroyCond(m->ready);
     if(m->lock)SDL_DestroyMutex(m->lock);
     for(int i=0;i<QUEUE;i++)free(m->frames[i]);
@@ -99,12 +129,16 @@ sdl_movie *sdl_movie_open(const uint8_t *data,size_t size,int interlace,int repe
 {
     if(!data || !size || size>512u*1024*1024)return NULL;
     sdl_movie *m=calloc(1,sizeof *m);if(!m)return NULL;
+#ifndef _WIN32
+    m->pipe=-1;
+#endif
     m->rate=interlace?60:30;
     if(audio_track>0 && !repeat) {
         if(gt4_pss_audio(data,size,(unsigned)audio_track,&m->pcm,&m->audio_frames))
             fprintf(stderr,"movie: audio track %d, stereo 48000 Hz, %zu frames\n",audio_track,m->audio_frames);
         else fprintf(stderr,"movie: unsupported or missing audio track %d\n",audio_track);
     }
+#ifdef _WIN32
     wchar_t temp[MAX_PATH],exe[MAX_PATH],cmd[2048];
     if(!GetTempPathW(MAX_PATH,temp) || !GetTempFileNameW(temp,L"og4",0,m->path))goto fail;
     FILE *f=_wfopen(m->path,L"wb");if(!f)goto fail;
@@ -151,6 +185,46 @@ sdl_movie *sdl_movie_open(const uint8_t *data,size_t size,int interlace,int repe
     CloseHandle(write_pipe);CloseHandle(nul);
     if(!ok)goto fail;
     m->process=pi.hProcess;CloseHandle(pi.hThread);
+#else
+    const char *temp=getenv("TMPDIR");if(!temp || !*temp)temp="/tmp";
+    if(snprintf(m->path,sizeof m->path,"%s/opengt4-movie-XXXXXX",temp)>=(int)sizeof m->path){m->path[0]=0;goto fail;}
+    int fd=mkstemp(m->path);
+    if(fd<0){m->path[0]=0;goto fail;}
+    size_t offset=0;
+    while(offset<size){
+        ssize_t n=write(fd,data+offset,size-offset);
+        if(n<0 && errno==EINTR)continue;
+        if(n<=0){close(fd);goto fail;}
+        offset+=(size_t)n;
+    }
+    if(close(fd))goto fail;
+    const char *exe=getenv("OPENGT4_FFMPEG_BINARY");
+    if(!exe || !*exe)exe="ffmpeg";
+    const char *filter=interlace?
+        "il=l=i:c=i,setfield=tff,yadif=mode=send_field:parity=tff,scale=640:448:in_range=full:out_range=full,format=rgba,fps=60000/1001":
+        "scale=640:448:in_range=full:out_range=full,format=rgba,fps=30000/1001";
+    char *args[32];int argc=0;
+#define ARG(value) args[argc++]=(char *)(value)
+    ARG(exe);ARG("-v");ARG("error");ARG("-nostdin");ARG("-threads");ARG("1");
+    if(repeat){ARG("-stream_loop");ARG("-1");}
+    ARG("-i");ARG(m->path);ARG("-an");ARG("-sn");ARG("-vf");ARG(filter);
+    ARG("-pix_fmt");ARG("rgba");ARG("-f");ARG("rawvideo");ARG("pipe:1");args[argc]=NULL;
+#undef ARG
+    int pipes[2];if(pipe(pipes))goto fail;
+    /* SDL audio/loader threads may be alive. Spawn without invoking a shell
+       or running allocation code in a forked copy of the application. */
+    fcntl(pipes[0],F_SETFD,FD_CLOEXEC);fcntl(pipes[1],F_SETFD,FD_CLOEXEC);
+    posix_spawn_file_actions_t actions;
+    if(posix_spawn_file_actions_init(&actions)){close(pipes[0]);close(pipes[1]);goto fail;}
+    int err=posix_spawn_file_actions_adddup2(&actions,pipes[1],STDOUT_FILENO);
+    if(!err)err=posix_spawn_file_actions_addopen(&actions,STDIN_FILENO,"/dev/null",O_RDONLY,0);
+    if(!err)err=posix_spawn_file_actions_addclose(&actions,pipes[0]);
+    if(!err)err=posix_spawn_file_actions_addclose(&actions,pipes[1]);
+    if(!err)err=posix_spawnp(&m->process,exe,&actions,NULL,args,environ);
+    posix_spawn_file_actions_destroy(&actions);close(pipes[1]);
+    if(err){close(pipes[0]);m->process=0;fprintf(stderr,"movie: %s: %s\n",exe,strerror(err));goto fail;}
+    m->pipe=pipes[0];
+#endif
     m->lock=SDL_CreateMutex();m->ready=SDL_CreateCond();
     if(!m->lock || !m->ready)goto fail;
     for(int i=0;i<QUEUE;i++){m->frames[i]=malloc(FRAME_BYTES);if(!m->frames[i])goto fail;}
@@ -181,14 +255,3 @@ int sdl_movie_draw(sdl_movie *m,float x,float y,float w,float h,float opacity)
     uint8_t tint[4]={255,255,255,(uint8_t)(255*opacity)};
     plat_draw_quad(m->texture,x,y,w,h,0,0,1,1,tint);return 1;
 }
-#else
-struct sdl_movie {int unused;};
-void sdl_movie_audio(sdl_movie *m,int enabled){(void)m;(void)enabled;}
-void sdl_movie_release_texture(sdl_movie *m){(void)m;}
-int sdl_movie_ready(sdl_movie *m){(void)m;return 0;}
-int sdl_movie_finished(sdl_movie *m){(void)m;return 0;}
-uint64_t sdl_movie_frame_count(const sdl_movie *m){(void)m;return 0;}
-sdl_movie *sdl_movie_open(const uint8_t *p,size_t n,int i,int r,int a){(void)p;(void)n;(void)i;(void)r;(void)a;return NULL;}
-void sdl_movie_close(sdl_movie *m){(void)m;}
-int sdl_movie_draw(sdl_movie *m,float x,float y,float w,float h,float a){(void)m;(void)x;(void)y;(void)w;(void)h;(void)a;return 0;}
-#endif

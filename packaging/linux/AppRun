@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+state=${XDG_CONFIG_HOME:-"$HOME/.config"}/opengt4-steam-deck
+mkdir -p "$state"
+# Arguments are passed as separate words throughout, never evaluated as shell code.
+if [ "${1:-}" = --choose-disc ]; then
+    shift
+    disc=
+elif [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ]; then
+    disc=$1
+    shift
+elif [ -f "$state/disc-path" ]; then
+    IFS= read -r disc < "$state/disc-path" || disc=
+else
+    disc=
+fi
+if [ ! -f "$disc" ] || [ ! -r "$disc" ]; then
+    if command -v kdialog >/dev/null 2>&1; then
+        disc=$(kdialog --title 'OpenGT4 Steam Deck Edition — Based on OpenGT4' --getopenfilename "$HOME" '*.iso|PS2 disc image (*.iso)') || exit 0
+    elif command -v zenity >/dev/null 2>&1; then
+        disc=$(zenity --file-selection --title='OpenGT4 Steam Deck Edition — Based on OpenGT4' --file-filter='PS2 disc image | *.iso *.ISO') || exit 0
+    else
+        printf '%s\n' 'First run: use Desktop Mode and pass your ISO as an argument, or install kdialog/zenity for a file picker.' >&2
+        exit 2
+    fi
+fi
+[ -n "$disc" ] || exit 0
+[ -f "$disc" ] && [ -r "$disc" ] || { printf '%s\n' 'Cannot read the selected disc image.' >&2; exit 2; }
+# Convert relative paths before persisting them. The image is never copied.
+case "$disc" in
+    /*) ;;
+    *) disc="$(CDPATH= cd -- "$(dirname -- "$disc")" && pwd)/$(basename -- "$disc")" ;;
+esac
+case "$disc" in
+    *'
+'*) printf '%s\n' 'Disc paths containing newlines are unsupported.' >&2; exit 2 ;;
+esac
+printf '%s\n' "$disc" > "$state/disc-path.tmp.$$"
+mv -- "$state/disc-path.tmp.$$" "$state/disc-path"
+printf '%s\n' 'OpenGT4 Steam Deck Edition (experimental) — Based on OpenGT4' >&2
+export LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export OPENGT4_FFMPEG_BINARY="$appdir/usr/bin/ffmpeg"
+exec "$appdir/usr/bin/opengt4" "$disc" --fullscreen "$@"

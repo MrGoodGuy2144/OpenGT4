@@ -16,6 +16,7 @@
 #include "course.h"
 #include "inflate.h"
 #include "spectables.h"
+#include "specdb.h"
 #include "vol.h"
 
 #include <fenv.h>

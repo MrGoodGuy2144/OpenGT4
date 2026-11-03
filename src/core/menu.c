@@ -19,6 +19,7 @@
 #include "replay_file.h"
 #include "disc_replay.h"
 #include "ps2_media.h"
+static int to_int(ah_val v);
 static char film_loaded[96];
 #include "pad_config.h"
 #include "album_slide.h"
